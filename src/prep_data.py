@@ -24,7 +24,7 @@ Usage:
         --langs ady arm bul dut fre ...
 """
 
-import argparse
+
 import os
 import glob
 

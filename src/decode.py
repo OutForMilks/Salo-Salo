@@ -9,7 +9,7 @@ Example:
         --src prepared/dev.src --out dev.pred --beam 5
 """
 
-import argparse
+
 import torch
 import torch.nn.functional as F
 

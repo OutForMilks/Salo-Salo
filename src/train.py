@@ -13,16 +13,16 @@ checkpoints saved here load there unchanged.
 Run several seeds, then ensemble the checkpoints with decode.py
 """
 
-import argparse
+
 import os
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from vocab import build_vocabs, save_vocabs, PAD_ID
-from dataset import G2PDataset
-from transformer import Transformer
+from src.vocab import build_vocabs, save_vocabs, PAD_ID
+from src.dataset import G2PDataset
+from src.transformer import Transformer
 
 
 # --------------------------------------------------------------------------
