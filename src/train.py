@@ -1,35 +1,80 @@
-"""Train one multilingual G2P Transformer.
+"""Train the multilingual G2P Transformer on a TPU via PyTorch/XLA.
 
-Run this several times with different ``--seed`` values and keep the
-intermediate checkpoints; ``decode.py`` then ensembles them.  Defaults follow
-the paper (Vaswani-style hyper-parameters, 200k steps, checkpoints every 50k).
+XLA compiles one graph per unique tensor shape and recompiles whenever a shape changes,
+so the per-batch padding used in ``train.py`` would trigger constant recompilation on a
+TPU.  Here every batch is padded to fixed ``max_src``/``max_tgt`` lengths (computed
+once from the training data) and ``drop_last=True`` keeps the batch dimension
+constant, so XLA compiles a single graph and reuses it every step.
 
-Example:
-    python train.py --data prepared --out runs/seed1 --seed 1 \
-        --steps 200000 --save-every 50000
+Designed for free Colab/Kaggle TPU (single core by default -- simplest and
+robust).  Decoding still belongs on CPU/GPU: run ``decode.py`` separately; the
+checkpoints saved here load there unchanged.
+
+Run several seeds, then ensemble the checkpoints with decode.py
 """
 
 import argparse
-import math
 import os
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.vocab import build_vocabs, save_vocabs, PAD_ID
-from src.dataset import G2PDataset, collate
-from src.transformer import Transformer
+from vocab import build_vocabs, save_vocabs, PAD_ID
+from dataset import G2PDataset
+from transformer import Transformer
+
+
+# --------------------------------------------------------------------------
+# Static-shape padding: this is the key change for TPU.
+# --------------------------------------------------------------------------
+def make_fixed_collate(max_src, max_tgt):
+    """Return a collate fn that pads every batch to fixed lengths."""
+    def collate(batch):
+        B = len(batch)
+        src = torch.full((B, max_src), PAD_ID, dtype=torch.long)
+        tgt_in = torch.full((B, max_tgt), PAD_ID, dtype=torch.long)
+        tgt_out = torch.full((B, max_tgt), PAD_ID, dtype=torch.long)
+        for i, (s, t) in enumerate(batch):
+            s = s[:max_src]
+            ti, to = t[:-1][:max_tgt], t[1:][:max_tgt]
+            src[i, : len(s)] = torch.tensor(s, dtype=torch.long)
+            tgt_in[i, : len(ti)] = torch.tensor(ti, dtype=torch.long)
+            tgt_out[i, : len(to)] = torch.tensor(to, dtype=torch.long)
+        src_pad = src.eq(PAD_ID)
+        tgt_pad = tgt_in.eq(PAD_ID)
+        return src, tgt_in, tgt_out, src_pad, tgt_pad
+    return collate
+
+
+def compute_max_lengths(dataset, pad_to_multiple=8):
+    """Largest source / decoder-input lengths in the data.
+
+    Rounded up to a multiple (TPUs like dimensions that are multiples of 8/128;
+    8 is a safe, cheap choice here) so the single compiled graph is MXU-friendly.
+    """
+    max_src = max(len(s) for s, _ in dataset.examples)
+    max_tgt = max(len(t) - 1 for _, t in dataset.examples)  # decoder input length
+
+    def roundup(n):
+        return ((n + pad_to_multiple - 1) // pad_to_multiple) * pad_to_multiple
+
+    return roundup(max_src), roundup(max_tgt)
 
 
 class NoamLR:
-    """Vaswani et al. learning-rate schedule: warmup then inverse-sqrt decay."""
+    """Vaswani LR schedule. Uses xm.optimizer_step on XLA so the graph executes
+    and gradients are consolidated; plain optimizer.step() otherwise."""
 
-    def __init__(self, optimizer, d_model, warmup):
+    def __init__(self, optimizer, d_model, warmup, xla=False):
         self.opt = optimizer
         self.d_model = d_model
         self.warmup = warmup
+        self.xla = xla
         self.step_num = 0
+        if xla:
+            import torch_xla.core.xla_model as xm
+            self._xm = xm
 
     def step(self):
         self.step_num += 1
@@ -37,20 +82,18 @@ class NoamLR:
         lr = (self.d_model ** -0.5) * min(s ** -0.5, s * self.warmup ** -1.5)
         for g in self.opt.param_groups:
             g["lr"] = lr
-        self.opt.step()
+        if self.xla:
+            self._xm.optimizer_step(self.opt)
+        else:
+            self.opt.step()
 
 
 class LabelSmoothingLoss(nn.Module):
-    """Cross-entropy with label smoothing, ignoring padding positions."""
-
     def __init__(self, vocab_size, pad_id, smoothing=0.1):
         super().__init__()
-        self.pad_id = pad_id
-        self.smoothing = smoothing
-        self.vocab_size = vocab_size
+        self.pad_id, self.smoothing, self.vocab_size = pad_id, smoothing, vocab_size
 
     def forward(self, logits, target):
-        # logits: (B, T, V); target: (B, T)
         logits = logits.view(-1, self.vocab_size)
         target = target.reshape(-1)
         logprobs = torch.log_softmax(logits, dim=-1)
@@ -61,13 +104,12 @@ class LabelSmoothingLoss(nn.Module):
             mask = target == self.pad_id
             true_dist[mask] = 0
         loss = torch.sum(-true_dist * logprobs, dim=1)
-        n_tokens = (~mask).sum().clamp(min=1)
-        return loss.sum() / n_tokens
+        return loss.sum() / (~mask).sum().clamp(min=1)
 
 
 def infinite_loader(loader):
     while True:
-        for batch in loader:
-            yield batch
+        for b in loader:
+            yield b
 
 

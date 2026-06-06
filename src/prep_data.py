@@ -89,19 +89,3 @@ def convert_split(in_dir, out_dir, langs, split):
         f.write("\n".join(lang_lines) + "\n")
     print(f"  -> wrote {len(src_lines)} lines to {split}.{{src,tgt,lang}}")
 
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in-dir", required=True)
-    ap.add_argument("--out-dir", default="prepared")
-    ap.add_argument("--langs", nargs="*", default=None,
-                    help="language codes; if omitted, auto-discover from *_train.tsv")
-    ap.add_argument("--splits", nargs="*", default=["train", "dev", "test"])
-    args = ap.parse_args()
-
-    langs = args.langs or discover_langs(args.in_dir)
-    print("Languages:", " ".join(langs))
-    for split in args.splits:
-        print(f"[{split}]")
-        convert_split(args.in_dir, args.out_dir, langs, split)
-
