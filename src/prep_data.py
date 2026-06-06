@@ -55,6 +55,8 @@ def graphemes(word):
 
 
 def convert_split(in_dir, out_dir, langs, split):
+    import os
+    print(os.getcwd())
     src_lines, tgt_lines, lang_lines = [], [], []
     for lang in langs:
         path = os.path.join(in_dir, f"{lang}_{split}.tsv")
