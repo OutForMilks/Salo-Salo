@@ -1,4 +1,3 @@
-l distance · PY
 """
 URIEL distance rows via the lang2vec package.
  
@@ -44,7 +43,7 @@ def _cosine_distance(v1, v2):
         return 1.0
     return 1.0 - dot / (n1 * n2)
 
-def uriel_row(metric, target, candidates)
+def uriel_row(metric, target, candidates):
     """
     {cand: distance} from `target` to each candidate for one URIEL metric.
     metric: 'genetic' or 'geographic'.
