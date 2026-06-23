@@ -138,7 +138,7 @@ def normalize(row):
     if not row:
         return {}
     
-    lo, hi = min(row.values(), max(row.values()))
+    lo, hi = min(row.values()), max(row.values())
     if hi == lo:
         return {k: 0.0 for k in row}
     
