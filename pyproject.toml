@@ -7,7 +7,9 @@ dependencies = [
     "torch",
     "transformers==4.41.0",
     "scikit-learn",
-    "lang2vec"
+    "lang2vec",
+    "setuptools<81",
+    "langcodes"
 ]
 
 [tool.uv.sources]
