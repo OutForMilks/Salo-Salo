@@ -71,6 +71,14 @@ def uriel_row(metric, target, candidates):
 def covered_languages():
     """
     ISO 639-3 codes URIEL knows about (use to prefilter candidates).
+    Reads directly from the database instead of using available_uriel_languages(),
+    which has an axis bug that silently excludes valid languages like 'fil'.
     """
-    return set(l2v.available_uriel_languages())
+    import pkg_resources
+    import os
+    import numpy as np
+    filename, _, _ = l2v.FEATURE_SETS_DICT["fam"]
+    filename = pkg_resources.resource_filename("lang2vec", os.path.join("data", filename))
+    db = np.load(filename)
+    return set(db["langs"].tolist())
 
