@@ -1,5 +1,5 @@
 import torch
-from src.vocab import Vocab, tokenize_source, PAD_ID, BOS_ID, EOS_ID
+from src.vocab import Vocab, tokenize_source, PAD_ID
 from src.transformer import Transformer
 from src.decode import beam_search
 
