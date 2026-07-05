@@ -93,6 +93,36 @@ def beam_search(models, src_ids, tgt_vocab, device, beam=5, max_len=64, alpha=0.
     ids = [t for t in best if t not in (BOS_ID, EOS_ID, PAD_ID)]
     return tgt_vocab.decode(ids)
 
+@torch.no_grad()
+def batch_decode(models, src_batch, src_pad_batch, tgt_vocab, device, max_len=64):
+    B = src_batch.size(0)
+    memories = [m.encode(src_batch, src_pad_batch) for m in models]
+
+    ys = torch.full((B, 1), BOS_ID, dtype=torch.long, device=device)
+    finished = torch.zeros(B, dtype=torch.bool, device=device)
+
+    for _ in range(max_len):
+        tgt_pad = ys.eq(PAD_ID)
+        avg_probs = torch.zeros(B, len(tgt_vocab), device=device)
+        for m, mem in zip(models, memories):
+            dec = m.decode(ys, mem, src_pad_batch, tgt_pad)
+            logits = m.generator(dec[:, -1])
+            avg_probs += torch.softmax(logits, dim=-1)
+        avg_probs /= len(models)
+
+        next_tok = avg_probs.argmax(dim=-1, keepdim=True)
+        next_tok = torch.where(finished.unsqueeze(1), torch.full_like(next_tok, PAD_ID), next_tok)
+        ys = torch.cat([ys, next_tok], dim=1)
+
+        finished = finished | (next_tok.squeeze(1) == EOS_ID)
+        if finished.all():
+            break
+
+    results = []
+    for i in range(B):
+        ids = [t.item() for t in ys[i] if t.item() not in (BOS_ID, EOS_ID, PAD_ID)]
+        results.append(tgt_vocab.decode(ids))
+    return results
 
 def main():
     ap = argparse.ArgumentParser()

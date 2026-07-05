@@ -1,7 +1,7 @@
 import torch
 from src.vocab import Vocab, tokenize_source, PAD_ID
 from src.transformer import Transformer
-from src.decode import beam_search
+from src.decode import beam_search, batch_decode
 
 def load_models_fixed(paths, device):
     models, src_vocab, tgt_vocab = [], None, None
@@ -79,3 +79,36 @@ def evaluate_checkpoint(model_paths, src_path, tgt_path, device, beam=5, max_len
     wer = compute_wer(references, hypotheses)
     return per, wer, references, hypotheses
 
+def batch_evaluate_checkpoint(model_paths, src_path, tgt_path, device, batch_size=64, max_len=64):
+    models, src_vocab, tgt_vocab = load_models_fixed(model_paths, device)
+
+    with open(src_path, encoding="utf-8") as f:
+        src_lines = [l.rstrip("\n") for l in f if l.strip()]
+    with open(tgt_path, encoding="utf-8") as f:
+        tgt_lines = [l.rstrip("\n") for l in f if l.strip()]
+    assert len(src_lines) == len(tgt_lines)
+
+    references, hypotheses = [], []
+    for start in range(0, len(src_lines), batch_size):
+        batch_src_lines = src_lines[start:start + batch_size]
+        batch_tgt_lines = tgt_lines[start:start + batch_size]
+
+        encoded = [src_vocab.encode(tokenize_source(l)) for l in batch_src_lines]
+        max_s_len = max(len(e) for e in encoded)
+
+        src_padded = torch.full((len(encoded), max_s_len), PAD_ID, dtype=torch.long)
+        for i, e in enumerate(encoded):
+            src_padded[i, :len(e)] = torch.tensor(e, dtype=torch.long)
+        src_padded = src_padded.to(device)
+        src_pad_mask = src_padded.eq(PAD_ID)
+
+        preds = batch_decode(models, src_padded, src_pad_mask, tgt_vocab, device, max_len=max_len)
+
+        references.extend(l.split() for l in batch_tgt_lines)
+        hypotheses.extend(preds)
+
+        print(f"  decoded {min(start + batch_size, len(src_lines))}/{len(src_lines)}")
+
+    per = compute_per(references, hypotheses)
+    wer = compute_wer(references, hypotheses)
+    return per, wer, references, hypotheses
