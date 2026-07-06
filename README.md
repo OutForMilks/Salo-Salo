@@ -19,3 +19,7 @@ the same held-out Tagalog test set.
   mix, with tuning of the language-sampling temperature
 - A language-similarity analysis (phoneme inventory, script, and URIEL
   genetic/geographic distances) to relate transfer to language relatedness
+
+## Authors
+
+Enrique Aragon, Stephen Borja, Justin Ethan Ching, Erin Gabrielle Chua
