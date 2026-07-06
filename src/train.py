@@ -47,6 +47,22 @@ def make_fixed_collate(max_src, max_tgt):
     return collate
 
 
+def make_dynamic_collate():
+    """Return a collate fn that pads each batch only to its own max lengths.
+
+    GPU-only alternative to ``make_fixed_collate``: eager CUDA kernels don't
+    care about varying shapes, and most words are far shorter than the global
+    max (mean src length ~8 vs. a fixed 48), so per-batch padding skips most
+    of the padding compute.  Keep the fixed version on XLA, where every new
+    shape would trigger a recompile.
+    """
+    def collate(batch):
+        max_src = max(len(s) for s, _ in batch)
+        max_tgt = max(len(t) - 1 for _, t in batch)  # decoder input length
+        return make_fixed_collate(max_src, max_tgt)(batch)
+    return collate
+
+
 def compute_max_lengths(dataset, pad_to_multiple=8):
     """Largest source / decoder-input lengths in the data.
 
