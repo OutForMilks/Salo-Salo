@@ -93,6 +93,71 @@ def beam_search(models, src_ids, tgt_vocab, device, beam=5, max_len=64, alpha=0.
     ids = [t for t in best if t not in (BOS_ID, EOS_ID, PAD_ID)]
     return tgt_vocab.decode(ids)
 
+
+@torch.no_grad()
+def batch_beam_decode(models, src_batch, src_pad_batch, tgt_vocab, device,
+                       beam=5, max_len=64, alpha=0.6):
+    B = src_batch.size(0)
+    V = len(tgt_vocab)
+    memories = [m.encode(src_batch, src_pad_batch) for m in models]
+    memories_exp = [mem.repeat_interleave(beam, dim=0) for mem in memories]
+    src_pad_exp = src_pad_batch.repeat_interleave(beam, dim=0)
+
+    ys = torch.full((B * beam, 1), BOS_ID, dtype=torch.long, device=device)
+
+    scores = torch.full((B * beam,), float("-inf"), device=device)
+    scores[torch.arange(B, device=device) * beam] = 0.0
+
+    finished = torch.zeros(B * beam, dtype=torch.bool, device=device)
+
+    for _ in range(max_len):
+        tgt_pad = ys.eq(PAD_ID)
+        avg_probs = torch.zeros(B * beam, V, device=device)
+        for m, mem in zip(models, memories_exp):
+            dec = m.decode(ys, mem, src_pad_exp, tgt_pad)
+            logits = m.generator(dec[:, -1])
+            avg_probs += torch.softmax(logits, dim=-1)
+        avg_probs /= len(models)
+        logprobs = torch.log(avg_probs + 1e-9)
+        logprobs[finished] = float("-inf")
+        logprobs[finished, PAD_ID] = 0.0
+
+        total_scores = scores.unsqueeze(1) + logprobs
+        total_scores = total_scores.view(B, beam * V)
+        topv, topi = total_scores.topk(beam, dim=1)
+
+        prev_beam_idx = topi // V
+        tok_idx = topi % V
+
+        batch_offset = (torch.arange(B, device=device) * beam).unsqueeze(1)
+        flat_prev_idx = (prev_beam_idx + batch_offset).view(-1)
+
+        ys = ys[flat_prev_idx]
+        ys = torch.cat([ys, tok_idx.view(-1, 1)], dim=1)
+        scores = topv.view(-1)
+        finished = finished[flat_prev_idx] | (tok_idx.view(-1) == EOS_ID)
+
+        if finished.all():
+            break
+    
+    seq_len = ys.size(1)
+    eos_positions = (ys == EOS_ID).float()
+    has_eos = eos_positions.sum(dim=1) > 0
+    first_eos = torch.where(has_eos, eos_positions.argmax(dim=1).float(), torch.tensor(float(seq_len - 1), device=device))
+    lengths = (first_eos + 1).clamp(min=1)
+    norm_scores = scores / (lengths ** alpha)
+
+    norm_scores = norm_scores.view(B, beam)
+    best_beam = norm_scores.argmax(dim=1)
+
+    ys = ys.view(B, beam, -1)
+    results = []
+    for b in range(B):
+        seq = ys[b, best_beam[b]].tolist()
+        ids = [t for t in seq if t not in (BOS_ID, EOS_ID, PAD_ID)]
+        results.append(tgt_vocab.decode(ids))
+    return results
+
 @torch.no_grad()
 def batch_decode(models, src_batch, src_pad_batch, tgt_vocab, device, max_len=64):
     B = src_batch.size(0)
